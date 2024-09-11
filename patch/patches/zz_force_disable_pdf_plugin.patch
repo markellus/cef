@@ -1,0 +1,122 @@
+From f860f34cea784f86181fd4b2bebacdd68aa7b7cc Mon Sep 17 00:00:00 2001
+From: Marcel Bulla <mbulla@eyefactive.com>
+Date: Fri, 13 Sep 2024 21:02:28 +0200
+Subject: [PATCH] Force disable PDF plugin
+
+---
+ .../plugins/pdf_iframe_navigation_throttle.cc | 47 +------------------
+ chrome/browser/plugins/plugin_observer.cc     |  3 --
+ chrome/browser/plugins/plugin_prefs.cc        |  2 +-
+ chrome/browser/plugins/plugin_utils.cc        |  4 +-
+ 4 files changed, 3 insertions(+), 53 deletions(-)
+
+diff --git chrome/browser/plugins/pdf_iframe_navigation_throttle.cc chrome/browser/plugins/pdf_iframe_navigation_throttle.cc
+index 3e586270f52ce..84b4268b0d4d6 100644
+--- chrome/browser/plugins/pdf_iframe_navigation_throttle.cc
++++ chrome/browser/plugins/pdf_iframe_navigation_throttle.cc
+@@ -61,12 +61,7 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(PdfWebContentsLifetimeHelper);
+ // also sets |is_stale| to true if the plugin list needs a reload.
+ bool IsPDFPluginEnabled(content::NavigationHandle* navigation_handle,
+                         bool* is_stale) {
+-  content::WebPluginInfo plugin_info;
+-  return content::PluginService::GetInstance()->GetPluginInfo(
+-      navigation_handle->GetWebContents()->GetBrowserContext(),
+-      navigation_handle->GetURL(), pdf::kPDFMimeType,
+-      false /* allow_wildcard */, is_stale, &plugin_info,
+-      nullptr /* actual_mime_type */);
++  return false;
+ }
+ #endif
+ 
+@@ -94,46 +89,6 @@ PDFIFrameNavigationThrottle::MaybeCreateThrottleFor(
+ 
+ content::NavigationThrottle::ThrottleCheckResult
+ PDFIFrameNavigationThrottle::WillProcessResponse() {
+-  const net::HttpResponseHeaders* response_headers =
+-      navigation_handle()->GetResponseHeaders();
+-  if (!response_headers)
+-    return content::NavigationThrottle::PROCEED;
+-
+-  std::string mime_type;
+-  response_headers->GetMimeType(&mime_type);
+-  if (mime_type != pdf::kPDFMimeType) {
+-    return content::NavigationThrottle::PROCEED;
+-  }
+-
+-  // We MUST download responses marked as attachments rather than showing
+-  // a placeholder.
+-  if (content::download_utils::MustDownload(
+-          navigation_handle()->GetWebContents()->GetBrowserContext(),
+-          navigation_handle()->GetURL(), response_headers, mime_type)) {
+-    return content::NavigationThrottle::PROCEED;
+-  }
+-
+-  ReportPDFLoadStatus(PDFLoadStatus::kLoadedIframePdfWithNoPdfViewer);
+-
+-#if BUILDFLAG(ENABLE_PLUGINS)
+-  bool is_stale = false;
+-  bool pdf_plugin_enabled = IsPDFPluginEnabled(navigation_handle(), &is_stale);
+-
+-  if (is_stale) {
+-    // On browser start, the plugin list may not be ready yet.
+-    content::PluginService::GetInstance()->GetPlugins(
+-        base::BindOnce(&PDFIFrameNavigationThrottle::OnPluginsLoaded,
+-                       weak_factory_.GetWeakPtr()));
+-    return content::NavigationThrottle::DEFER;
+-  }
+-
+-  // If the plugin was found, proceed on the navigation. Otherwise fall through
+-  // to the placeholder case.
+-  if (pdf_plugin_enabled)
+-    return content::NavigationThrottle::PROCEED;
+-#endif
+-
+-  LoadPlaceholderHTML();
+   return content::NavigationThrottle::CANCEL_AND_IGNORE;
+ }
+ 
+diff --git chrome/browser/plugins/plugin_observer.cc chrome/browser/plugins/plugin_observer.cc
+index f20e74c851604..80dd23d5eeb31 100644
+--- chrome/browser/plugins/plugin_observer.cc
++++ chrome/browser/plugins/plugin_observer.cc
+@@ -130,9 +130,6 @@ void PluginObserver::CouldNotLoadPlugin(const base::FilePath& plugin_path) {
+ void PluginObserver::OpenPDF(const GURL& url) {
+   content::RenderFrameHost* render_frame_host =
+       plugin_host_receivers_.GetCurrentTargetFrame();
+-  // WebViews should never trigger PDF downloads.
+-  if (extensions::WebViewGuest::FromRenderFrameHost(render_frame_host))
+-    return;
+ 
+   content::Referrer referrer;
+   if (!CanOpenPdfUrl(render_frame_host, url,
+diff --git chrome/browser/plugins/plugin_prefs.cc chrome/browser/plugins/plugin_prefs.cc
+index ddb0b92eba12d..5c285018152e6 100644
+--- chrome/browser/plugins/plugin_prefs.cc
++++ chrome/browser/plugins/plugin_prefs.cc
+@@ -55,7 +55,7 @@ bool PluginPrefs::IsPluginEnabled(const content::WebPluginInfo& plugin) const {
+ 
+ void PluginPrefs::UpdatePdfPolicy(const std::string& pref_name) {
+   always_open_pdf_externally_ =
+-      prefs_->GetBoolean(prefs::kPluginsAlwaysOpenPdfExternally);
++      true;
+ 
+   content::PluginService::GetInstance()->PurgePluginListCache(profile_, false);
+   std::vector<Profile*> otr_profiles = profile_->GetAllOffTheRecordProfiles();
+diff --git chrome/browser/plugins/plugin_utils.cc chrome/browser/plugins/plugin_utils.cc
+index 00dd9a34cd3fb..e9acd4da39079 100644
+--- chrome/browser/plugins/plugin_utils.cc
++++ chrome/browser/plugins/plugin_utils.cc
+@@ -93,9 +93,7 @@ PluginUtils::GetMimeTypeToExtensionIdMap(
+       continue;
+     }
+ 
+-    if (extension_id == extension_misc::kPdfExtensionId &&
+-        profile->GetPrefs()->GetBoolean(
+-            prefs::kPluginsAlwaysOpenPdfExternally)) {
++    if (extension_id == extension_misc::kPdfExtensionId) {
+       continue;
+     }
+ 
+-- 
+2.25.1.windows.1
+
